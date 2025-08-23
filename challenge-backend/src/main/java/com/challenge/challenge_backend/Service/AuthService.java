@@ -27,7 +27,6 @@ import org.springframework.transaction.annotation.Transactional;
 /**
  * Servicio de autenticación y autorización.
  * 
- * OPCIONAL - Solo necesario si implementas seguridad con JWT.
  * Maneja login, registro y gestión de tokens.
  */
 @Service
