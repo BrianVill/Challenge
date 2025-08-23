@@ -9,7 +9,6 @@ import com.challenge.challenge_backend.DTOs.Response.EstadisticasClienteDTO;
 import com.challenge.challenge_backend.Exception.BusinessException;
 import com.challenge.challenge_backend.Service.ClienteService;
 import com.challenge.challenge_backend.Service.EmailService;
-import com.google.api.Authentication;
 
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
@@ -31,6 +30,7 @@ import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.security.core.userdetails.UserDetails;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.security.core.Authentication;
 
 import java.util.List;
 

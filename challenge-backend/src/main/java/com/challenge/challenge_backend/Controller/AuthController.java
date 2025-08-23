@@ -6,7 +6,8 @@ import com.challenge.challenge_backend.DTOs.Request.RegisterRequestDTO;
 import com.challenge.challenge_backend.DTOs.Response.ApiResponseDTO;
 import com.challenge.challenge_backend.DTOs.Response.AuthResponseDTO;
 import com.challenge.challenge_backend.Service.AuthService;
-import com.google.api.Authentication;
+
+
 
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.media.Content;
@@ -20,7 +21,9 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
+import org.springframework.security.core.userdetails.UserDetails;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.security.core.Authentication;
 
 /**
  * Controller para autenticación y autorización.
