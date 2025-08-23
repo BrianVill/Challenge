@@ -122,29 +122,6 @@ public class AuthController {
         
         return new ResponseEntity<>(response, HttpStatus.CREATED);
     }
-
-    public ResponseEntity<ApiResponseDTO<AuthResponseDTO>> register(
-            @Valid @RequestBody RegisterRequestDTO request) {
-        
-        log.info("POST /api/auth/register - Registro de nuevo usuario: {}", request.getEmail());
-        
-        try {
-            AuthResponseDTO authResponse = authService.register(request);
-            
-            ApiResponseDTO<AuthResponseDTO> response = ApiResponseDTO.success(
-                authResponse,
-                "Usuario registrado exitosamente"
-            );
-            
-            log.info("Registro exitoso para: {}", request.getEmail());
-            
-            return new ResponseEntity<>(response, HttpStatus.CREATED);
-            
-        } catch (Exception e) {
-            log.error("Error registrando usuario {}: {}", request.getEmail(), e.getMessage());
-            throw e;
-        }
-    }
     
     /**
      * Endpoint para validar si un token es válido.
