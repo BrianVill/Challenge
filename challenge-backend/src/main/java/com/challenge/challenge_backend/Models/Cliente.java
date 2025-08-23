@@ -57,6 +57,20 @@ public class Cliente {
     private Boolean activo = true;
 
     /**
+     * Usuario que creó el cliente
+     * Para auditoría
+     */
+    @Column(name = "creado_por", length = 100)
+    private String creadoPor;
+    
+    /**
+     * Usuario que realizó la última actualización
+     * Para auditoría
+     */
+    @Column(name = "actualizado_por", length = 100)
+    private String actualizadoPor;
+    
+    /**
      * Método que se ejecuta automáticamente ANTES de insertar
      * un nuevo registro en la base de datos
      */

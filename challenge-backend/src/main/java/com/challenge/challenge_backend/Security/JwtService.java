@@ -5,12 +5,15 @@ import com.challenge.challenge_backend.Exception.TokenException.TokenErrorType;
 import io.jsonwebtoken.*;
 import io.jsonwebtoken.io.Decoders;
 import io.jsonwebtoken.security.Keys;
+import jakarta.annotation.PostConstruct;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.security.core.userdetails.UserDetails;
 import org.springframework.stereotype.Service;
 
 import javax.crypto.SecretKey;
+
+import java.nio.charset.StandardCharsets;
 import java.util.Date;
 import java.util.HashMap;
 import java.util.Map;
@@ -26,20 +29,51 @@ public class JwtService {
     @Value("${jwt.secret}")
     private String secretKey;
     
-    @Value("${jwt.expiration}")
+    @Value("${jwt.expiration:86400000}")  // Default 24 horas
     private Long jwtExpiration;
     
     // La clave secreta para firmar/verificar tokens
     private SecretKey key;
     
     /**
-     * Inicializa la clave secreta.
-     * Se llama automáticamente después de la inyección de dependencias.
+     * Inicializa la clave secreta con manejo de errores.
      */
-    @jakarta.annotation.PostConstruct
+    @PostConstruct
     public void init() {
-        byte[] keyBytes = Decoders.BASE64.decode(secretKey);
-        this.key = Keys.hmacShaKeyFor(keyBytes);
+        try {
+            // Intentar decodificar como Base64
+            byte[] keyBytes = Decoders.BASE64.decode(secretKey);
+            this.key = Keys.hmacShaKeyFor(keyBytes);
+            log.info("JWT Secret key inicializada correctamente (Base64)");
+            
+        } catch (Exception e) {
+            log.warn("El secret no es Base64 válido, usando el string directo: {}", e.getMessage());
+            
+            try {
+                // Si falla, usar el string directamente pero asegurar 256 bits mínimo
+                String paddedSecret = secretKey;
+                
+                // Si el secret es muy corto, lo extendemos
+                while (paddedSecret.getBytes(StandardCharsets.UTF_8).length < 32) {
+                    paddedSecret = paddedSecret + secretKey;
+                }
+                
+                // Tomar solo los primeros 32 bytes (256 bits)
+                byte[] keyBytes = paddedSecret.getBytes(StandardCharsets.UTF_8);
+                if (keyBytes.length > 32) {
+                    byte[] trimmedKey = new byte[32];
+                    System.arraycopy(keyBytes, 0, trimmedKey, 0, 32);
+                    keyBytes = trimmedKey;
+                }
+                
+                this.key = Keys.hmacShaKeyFor(keyBytes);
+                log.info("JWT Secret key inicializada usando string directo (convertido a 256 bits)");
+                
+            } catch (Exception ex) {
+                log.error("Error fatal inicializando JWT secret key", ex);
+                throw new RuntimeException("No se pudo inicializar la clave JWT. Verifica jwt.secret en application.properties", ex);
+            }
+        }
     }
     
     /**

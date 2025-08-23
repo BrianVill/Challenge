@@ -7,7 +7,7 @@ import lombok.Data;
 import lombok.NoArgsConstructor;
 
 /**
- * DTO para registro de nuevo usuario.
+ * DTO para registro de nuevo usuario con rol.
  */
 @Data
 @Builder
@@ -32,5 +32,8 @@ public class RegisterRequestDTO {
     @NotBlank(message = "El apellido es obligatorio")
     @Size(min = 2, max = 100, message = "El apellido debe tener entre 2 y 100 caracteres")
     private String apellido;
+    
+    @Pattern(regexp = "^(USER|ADMIN)$", message = "El rol debe ser USER o ADMIN")
+    private String role;  // Opcional, por defecto será USER
 }
 

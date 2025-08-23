@@ -1,7 +1,9 @@
 package com.challenge.challenge_backend.Service;
 
 import com.challenge.challenge_backend.DTOs.Request.ClienteRequestDTO;
+import com.challenge.challenge_backend.DTOs.Response.BatchResponseDTO;
 import com.challenge.challenge_backend.DTOs.Response.ClienteResponseDTO;
+import com.challenge.challenge_backend.DTOs.Response.ErrorDetalleDTO;
 import com.challenge.challenge_backend.DTOs.Response.EstadisticasClienteDTO;
 import com.challenge.challenge_backend.Exception.BusinessException;
 import com.challenge.challenge_backend.Exception.ResourceNotFoundException;
@@ -20,6 +22,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDate;
+import java.time.LocalDateTime;
 import java.time.Period;
 import java.util.*;
 import java.util.stream.Collectors;
@@ -38,6 +41,7 @@ public class ClienteService {
 
     private final ClienteRepository clienteRepository;
     private final EmailService emailService;
+    private final AuthService authService;
 
     @Value("${app.cliente.esperanza-vida:75}")
     private int esperanzaVida; // Configurable desde application.properties
@@ -46,122 +50,134 @@ public class ClienteService {
     // CREAR CLIENTE
     // ========================================
 
-    /**
-     * Crea un nuevo cliente en el sistema.
-     * 
-     * @param request DTO con los datos del cliente a crear
-     * @return DTO con la información del cliente creado
-     * @throws BusinessException si el cliente ya existe o hay datos inválidos
+   /**
+     * Crea un nuevo cliente (sin el parámetro emailDestino para mantener compatibilidad).
      */
-    @CacheEvict(value = { "estadisticas", "clientes" }, allEntries = true)
+    @CacheEvict(value = {"estadisticas", "clientes"}, allEntries = true)
     public ClienteResponseDTO crearCliente(ClienteRequestDTO request) {
-        log.info("Iniciando creación de cliente: {} {}", request.getNombre(), request.getApellido());
-
-        // 1. Validar coherencia entre edad y fecha de nacimiento
+        // Obtener el usuario actual del contexto de seguridad
+        String usuarioCreador = authService.getUsuarioActual();
+        
+        log.info("Usuario {} creando cliente: {} {}", 
+                usuarioCreador, request.getNombre(), request.getApellido());
+        
+        // Validaciones
         validarCoherenciaEdadFechaNacimiento(request.getEdad(), request.getFechaNacimiento());
-
-        // 2. Verificar si ya existe un cliente similar (evitar duplicados)
+        
         boolean clienteExiste = clienteRepository.existsByNombreAndApellidoAndFechaNacimiento(
-                request.getNombre(),
-                request.getApellido(),
-                request.getFechaNacimiento());
-
+            request.getNombre(),
+            request.getApellido(),
+            request.getFechaNacimiento()
+        );
+        
         if (clienteExiste) {
-            log.warn("Intento de crear cliente duplicado: {} {}", request.getNombre(), request.getApellido());
+            log.warn("Usuario {} intentó crear cliente duplicado: {} {}", 
+                    usuarioCreador, request.getNombre(), request.getApellido());
             throw new BusinessException("Ya existe un cliente con los mismos datos");
         }
-
+        
         // Crear la entidad Cliente
         Cliente cliente = Cliente.builder()
                 .nombre(request.getNombre())
                 .apellido(request.getApellido())
                 .edad(request.getEdad())
                 .fechaNacimiento(request.getFechaNacimiento())
+                .creadoPor(usuarioCreador)  // Registrar quién lo creó
                 .build();
-
-        // Guardar en la base de datos
+        
         cliente = clienteRepository.save(cliente);
-        log.info("Cliente creado exitosamente con ID: {}", cliente.getId());
-
-        // Convertir a DTO de respuesta
+        
+        log.info("Cliente creado exitosamente con ID: {} por usuario: {}", 
+                cliente.getId(), usuarioCreador);
+        
         ClienteResponseDTO response = convertirAResponseDTO(cliente);
-
-        // ENVÍO ASÍNCRONO DE EMAIL - No bloquea el hilo principal
-        CompletableFuture<Boolean> emailFuture = emailService.enviarNotificacionClienteCreado(response);
-
-        // Manejar el resultado del email cuando termine (usando response que es final)
-        emailFuture.thenAccept(enviado -> {
-            if (enviado) {
-                log.info("Email de notificación enviado para cliente ID: {}", response.getId());
-            } else {
-                log.warn("No se pudo enviar email para cliente ID: {}", response.getId());
-            }
-        });
-
+        
+        // Si el emailService existe, enviar notificación al admin por defecto
+        if (emailService != null) {
+            CompletableFuture<Boolean> emailFuture = emailService.enviarNotificacionClienteCreado(response);
+            
+            emailFuture.thenAccept(enviado -> {
+                if (enviado) {
+                    log.info("Email de notificación enviado para cliente ID: {}", response.getId());
+                } else {
+                    log.warn("No se pudo enviar email para cliente ID: {}", response.getId());
+                }
+            });
+        }
+        
         return response;
     }
 
-    // ========================================
-    // OBTENER ESTADÍSTICAS
-    // ========================================
+    /**
+     * Sobrecarga del método para incluir email destino opcional.
+     */
+    @CacheEvict(value = {"estadisticas", "clientes"}, allEntries = true)
+    public ClienteResponseDTO crearCliente(ClienteRequestDTO request, String emailDestino) {
+        // Crear el cliente usando el método original
+        ClienteResponseDTO response = crearCliente(request);
+        
+        // Si se especificó un email destino adicional, enviar notificación
+        if (emailDestino != null && !emailDestino.isEmpty() && emailService != null) {
+            String usuarioCreador = authService.getUsuarioActual();
+            enviarNotificacionCreacion(response, usuarioCreador, emailDestino);
+        }
+        
+        return response;
+    }
 
     /**
-     * Calcula las estadísticas de todos los clientes activos.
-     * Incluye promedio de edad y desviación estándar.
-     * 
-     * @return DTO con las estadísticas calculadas
+     * Calcula estadísticas (sin emailDestino para compatibilidad).
      */
     @Cacheable(value = "estadisticas", key = "'general'")
     public EstadisticasClienteDTO calcularEstadisticas() {
         log.info("Calculando estadísticas de clientes");
-
-        // 1. Obtener todos los clientes activos
+        
         List<Cliente> clientesActivos = clienteRepository.findByActivoTrue();
-
-        // 2. Si no hay clientes, retornar estadísticas vacías
+        
         if (clientesActivos.isEmpty()) {
-            log.info("No hay clientes activos para calcular estadísticas");
             return EstadisticasClienteDTO.builder()
                     .totalClientes(0L)
                     .promedioEdad(0.0)
                     .desviacionEstandar(0.0)
+                    .fechaCalculo(LocalDateTime.now())  // Siempre establecer fecha
                     .mensaje("No hay clientes registrados en el sistema")
                     .build();
         }
-
-        // 3. Extraer las edades para los cálculos
+        
         List<Integer> edades = clientesActivos.stream()
                 .map(Cliente::getEdad)
                 .collect(Collectors.toList());
-
-        // 4. Calcular estadísticas básicas
+        
         double promedio = calcularPromedio(edades);
         double desviacionEstandar = calcularDesviacionEstandar(edades, promedio);
-
-        // 5. Calcular estadísticas adicionales
-        Integer edadMinima = Collections.min(edades);
-        Integer edadMaxima = Collections.max(edades);
-        Double mediana = calcularMediana(edades);
-        Map<String, Long> distribucion = calcularDistribucionPorRangoEdad(edades);
-
-        // 6. Construir y retornar el DTO
+        
         EstadisticasClienteDTO estadisticas = EstadisticasClienteDTO.builder()
                 .totalClientes((long) clientesActivos.size())
                 .promedioEdad(promedio)
                 .desviacionEstandar(desviacionEstandar)
-                .edadMinima(edadMinima)
-                .edadMaxima(edadMaxima)
-                .medianaEdad(mediana)
-                .distribucionPorRangoEdad(distribucion)
-                .mensaje(String.format("Estadísticas calculadas para %d clientes activos", clientesActivos.size()))
+                .edadMinima(Collections.min(edades))
+                .edadMaxima(Collections.max(edades))
+                .medianaEdad(calcularMediana(edades))
+                .distribucionPorRangoEdad(calcularDistribucionPorRangoEdad(edades))
+                .fechaCalculo(LocalDateTime.now())  // Siempre establecer fecha
+                .mensaje(String.format("Estadísticas calculadas para %d clientes activos", 
+                        clientesActivos.size()))
                 .build();
-
-        // ENVÍO ASÍNCRONO DE EMAIL
-        emailService.enviarNotificacionEstadisticasCalculadas(estadisticas)
-                .thenAccept(enviado -> {
-                    log.info("Notificación de estadísticas enviada: {}", enviado);
-                });
-
+        
+        return estadisticas;
+    }
+    
+    /**
+     * Sobrecarga del método para incluir email destino.
+     */
+    public EstadisticasClienteDTO calcularEstadisticas(String emailDestino) {
+        EstadisticasClienteDTO estadisticas = calcularEstadisticas();
+        
+        // Enviar email si se especificó
+        if (emailDestino != null && !emailDestino.isEmpty() && emailService != null) {
+            emailService.enviarNotificacionEstadisticasCalculadas(estadisticas, emailDestino);
+        }
+        
         return estadisticas;
     }
 
@@ -428,5 +444,235 @@ public class ClienteService {
         emailService.enviarNotificacionError("procesarClientesEnLote", resultado);
 
         return CompletableFuture.completedFuture(resultado);
+    }
+
+    /**
+     * Crea múltiples clientes en una sola operación.
+     * 
+     * Procesa cada cliente individualmente y continúa aunque algunos fallen.
+     * Envía notificación por email al finalizar con el resumen.
+     * 
+     * @param clientesRequest Lista de DTOs con datos de clientes a crear
+     * @return DTO con resumen del procesamiento
+     */
+    @Transactional
+    @CacheEvict(value = {"estadisticas", "clientes"}, allEntries = true)
+    public BatchResponseDTO crearClientesMasivo(List<ClienteRequestDTO> clientesRequest) {
+        log.info("Iniciando creación masiva de {} clientes", clientesRequest.size());
+        
+        List<ClienteResponseDTO> clientesCreados = new ArrayList<>();
+        List<ErrorDetalleDTO> errores = new ArrayList<>();
+        
+        int indice = 0;
+        for (ClienteRequestDTO request : clientesRequest) {
+            try {
+                // Intentar crear cada cliente
+                ClienteResponseDTO clienteCreado = crearClienteIndividual(request);
+                clientesCreados.add(clienteCreado);
+                
+                log.debug("Cliente {} creado exitosamente en batch", indice);
+                
+            } catch (BusinessException e) {
+                // Capturar errores de negocio (duplicados, validación)
+                ErrorDetalleDTO error = ErrorDetalleDTO.builder()
+                        .indice(indice)
+                        .nombre(request.getNombre())
+                        .apellido(request.getApellido())
+                        .error(e.getMessage())
+                        .build();
+                
+                errores.add(error);
+                log.warn("Error creando cliente {} en batch: {}", indice, e.getMessage());
+                
+            } catch (Exception e) {
+                // Capturar cualquier otro error inesperado
+                ErrorDetalleDTO error = ErrorDetalleDTO.builder()
+                        .indice(indice)
+                        .nombre(request.getNombre())
+                        .apellido(request.getApellido())
+                        .error("Error inesperado: " + e.getMessage())
+                        .build();
+                
+                errores.add(error);
+                log.error("Error inesperado creando cliente {} en batch", indice, e);
+            }
+            
+            indice++;
+        }
+        
+        // Construir respuesta con resumen - SINTAXIS CORRECTA
+        BatchResponseDTO resultado = BatchResponseDTO.builder()
+                .total(clientesRequest.size())
+                .exitosos(clientesCreados.size())
+                .fallidos(errores.size())
+                .fechaProcesamiento(LocalDateTime.now())
+                .clientesCreados(clientesCreados)
+                .errores(errores)
+                .build();
+        
+        log.info("Creación masiva completada: {} exitosos, {} fallidos de {} total",
+                resultado.getExitosos(), resultado.getFallidos(), resultado.getTotal());
+        
+        // Enviar notificación asíncrona con el resumen (si el emailService existe)
+        if (emailService != null) {
+            enviarNotificacionBatch(resultado);
+        }
+        
+        return resultado;
+    }
+    
+    /**
+     * Método interno para crear un cliente individual sin notificación.
+     * Se usa en el procesamiento batch para evitar múltiples emails.
+     */
+    private ClienteResponseDTO crearClienteIndividual(ClienteRequestDTO request) {
+        log.debug("Creando cliente individual en batch: {} {}", 
+                request.getNombre(), request.getApellido());
+        
+        // Validar coherencia entre edad y fecha de nacimiento
+        validarCoherenciaEdadFechaNacimiento(request.getEdad(), request.getFechaNacimiento());
+        
+        // Verificar si ya existe
+        boolean clienteExiste = clienteRepository.existsByNombreAndApellidoAndFechaNacimiento(
+            request.getNombre(),
+            request.getApellido(),
+            request.getFechaNacimiento()
+        );
+        
+        if (clienteExiste) {
+            throw new BusinessException(String.format(
+                "Cliente duplicado: %s %s con fecha nacimiento %s",
+                request.getNombre(), request.getApellido(), request.getFechaNacimiento()
+            ));
+        }
+        
+        // Crear y guardar
+        Cliente cliente = Cliente.builder()
+                .nombre(request.getNombre())
+                .apellido(request.getApellido())
+                .edad(request.getEdad())
+                .fechaNacimiento(request.getFechaNacimiento())
+                .build();
+        
+        cliente = clienteRepository.save(cliente);
+        
+        return convertirAResponseDTO(cliente);
+    }
+    
+    /**
+     * Envía notificación por email del resultado del batch.
+     */
+    private void enviarNotificacionBatch(BatchResponseDTO resultado) {
+        if (emailService != null) {
+            // Crear resumen para el email
+            String resumen = String.format(
+                "Procesamiento Batch Completado\n" +
+                "============================\n" +
+                "Total procesados: %d\n" +
+                "Exitosos: %d\n" +
+                "Fallidos: %d\n" +
+                "Fecha: %s\n",
+                resultado.getTotal(),
+                resultado.getExitosos(),
+                resultado.getFallidos(),
+                resultado.getFechaProcesamiento()
+            );
+            
+            // Si hay errores, incluirlos
+            if (!resultado.getErrores().isEmpty()) {
+                resumen += "\nErrores encontrados:\n";
+                for (ErrorDetalleDTO error : resultado.getErrores()) {
+                    resumen += String.format("- Cliente %s %s: %s\n", 
+                            error.getNombre(), error.getApellido(), error.getError());
+                }
+            }
+            
+            // Enviar email asíncrono
+            emailService.enviarNotificacionError("crearClientesMasivo", resumen);
+        }
+    }
+    
+    /**
+     * Método asíncrono alternativo para procesamiento en background.
+     * Útil para grandes volúmenes de datos.
+     */
+    @Async
+    public CompletableFuture<BatchResponseDTO> crearClientesMasivoAsync(
+            List<ClienteRequestDTO> clientesRequest) {
+        
+        log.info("Iniciando procesamiento ASÍNCRONO de {} clientes", clientesRequest.size());
+        
+        BatchResponseDTO resultado = crearClientesMasivo(clientesRequest);
+        
+        return CompletableFuture.completedFuture(resultado);
+    }
+    
+    /**
+     * Valida un batch de clientes antes de procesarlos.
+     * Útil para pre-validación.
+     */
+    public List<String> validarBatch(List<ClienteRequestDTO> clientes) {
+        List<String> erroresValidacion = new ArrayList<>();
+        
+        for (int i = 0; i < clientes.size(); i++) {
+            ClienteRequestDTO cliente = clientes.get(i);
+            
+            // Validar coherencia edad/fecha
+            try {
+                validarCoherenciaEdadFechaNacimiento(
+                    cliente.getEdad(), 
+                    cliente.getFechaNacimiento()
+                );
+            } catch (BusinessException e) {
+                erroresValidacion.add(String.format(
+                    "Cliente %d (%s %s): %s",
+                    i, cliente.getNombre(), cliente.getApellido(), e.getMessage()
+                ));
+            }
+            
+            // Verificar duplicados
+            if (clienteRepository.existsByNombreAndApellidoAndFechaNacimiento(
+                    cliente.getNombre(),
+                    cliente.getApellido(),
+                    cliente.getFechaNacimiento())) {
+                
+                erroresValidacion.add(String.format(
+                    "Cliente %d (%s %s): Ya existe en el sistema",
+                    i, cliente.getNombre(), cliente.getApellido()
+                ));
+            }
+        }
+        
+        return erroresValidacion;
+    }
+
+    /**
+     * Enviar notificación de creación con información del usuario.
+     */
+    private void enviarNotificacionCreacion(ClienteResponseDTO cliente, 
+                                           String usuarioCreador, 
+                                           String emailDestino) {
+        if (emailService != null) {
+            String mensaje = String.format(
+                "Cliente creado exitosamente:\n" +
+                "ID: %d\n" +
+                "Nombre: %s %s\n" +
+                "Edad: %d años\n" +
+                "Creado por: %s\n" +
+                "Fecha: %s",
+                cliente.getId(),
+                cliente.getNombre(),
+                cliente.getApellido(),
+                cliente.getEdad(),
+                usuarioCreador,
+                LocalDateTime.now()
+            );
+            
+            emailService.enviarNotificacionPersonalizada(
+                emailDestino,
+                "Cliente Creado - " + cliente.getNombre() + " " + cliente.getApellido(),
+                mensaje
+            );
+        }
     }
 }

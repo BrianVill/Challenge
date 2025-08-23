@@ -1,9 +1,11 @@
 package com.challenge.challenge_backend.Service;
 
+import com.challenge.challenge_backend.DTOs.Request.ChangePasswordRequestDTO;
 import com.challenge.challenge_backend.DTOs.Request.LoginRequestDTO;
 import com.challenge.challenge_backend.DTOs.Request.RegisterRequestDTO;
 import com.challenge.challenge_backend.DTOs.Response.AuthResponseDTO;
 import com.challenge.challenge_backend.Exception.BusinessException;
+import com.challenge.challenge_backend.Exception.ForbiddenException;
 import com.challenge.challenge_backend.Exception.UnauthorizedException;
 import com.challenge.challenge_backend.Models.Usuario;
 import com.challenge.challenge_backend.Models.Usuario.Role;
@@ -13,10 +15,14 @@ import com.challenge.challenge_backend.Security.JwtService;
 
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+
+import java.time.LocalDateTime;
+
 import org.springframework.security.authentication.AuthenticationManager;
 import org.springframework.security.authentication.BadCredentialsException;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.Authentication;
+import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.security.core.userdetails.UserDetails;
 import org.springframework.security.core.userdetails.UserDetailsService;
 import org.springframework.security.core.userdetails.UsernameNotFoundException;
@@ -40,22 +46,13 @@ public class AuthService implements UserDetailsService {
     private final JwtService jwtService;
     private final AuthenticationManager authenticationManager;
     
-    // ========================================
-    // LOGIN
-    // ========================================
-    
     /**
-     * Autentica un usuario y genera un token JWT.
-     * 
-     * @param request DTO con credenciales de login
-     * @return DTO con token JWT y datos del usuario
-     * @throws UnauthorizedException si las credenciales son inválidas
+     * Login - Público
      */
     public AuthResponseDTO login(LoginRequestDTO request) {
         log.info("Intento de login para usuario: {}", request.getEmail());
         
         try {
-            // 1. Autenticar las credenciales
             Authentication authentication = authenticationManager.authenticate(
                 new UsernamePasswordAuthenticationToken(
                     request.getEmail(),
@@ -63,16 +60,14 @@ public class AuthService implements UserDetailsService {
                 )
             );
             
-            // 2. Obtener el usuario autenticado
             Usuario usuario = (Usuario) authentication.getPrincipal();
             
-            // 3. Generar token JWT
             String token = jwtService.generateToken(usuario);
             Long expiresIn = jwtService.getExpirationTime();
             
-            log.info("Login exitoso para usuario: {}", usuario.getEmail());
+            log.info("Login exitoso para usuario: {} con rol: {}", 
+                    usuario.getEmail(), usuario.getRole());
             
-            // 4. Construir respuesta
             return new AuthResponseDTO(
                 token,
                 expiresIn,
@@ -84,90 +79,108 @@ public class AuthService implements UserDetailsService {
             
         } catch (BadCredentialsException e) {
             log.warn("Credenciales inválidas para usuario: {}", request.getEmail());
-            throw new UnauthorizedException("Email o contraseña incorrectos");
+            throw new UnauthorizedException("Email o contraseña incorrectos. Por favor, verifique sus credenciales.");
         } catch (Exception e) {
             log.error("Error durante el login: {}", e.getMessage());
-            throw new UnauthorizedException("Error al autenticar usuario");
+            throw new UnauthorizedException("Error al autenticar. Por favor, intente nuevamente.");
         }
     }
     
-    // ========================================
-    // REGISTRO
-    // ========================================
-    
     /**
-     * Registra un nuevo usuario en el sistema.
-     * 
-     * @param request DTO con datos del nuevo usuario
-     * @return DTO con token JWT del usuario registrado
-     * @throws BusinessException si el email ya está registrado
+     * Registro - Solo ADMIN puede registrar nuevos usuarios
+     * CORREGIDO: Ahora acepta solo RegisterRequestDTO y el adminEmail
      */
-    public AuthResponseDTO register(RegisterRequestDTO request) {
-        log.info("Registro de nuevo usuario: {}", request.getEmail());
+    public AuthResponseDTO register(RegisterRequestDTO request, String adminEmail) {
+        log.info("Admin {} registrando nuevo usuario: {}", adminEmail, request.getEmail());
         
-        // 1. Verificar si el email ya existe
-        if (usuarioRepository.existsByEmail(request.getEmail())) {
-            log.warn("Intento de registro con email duplicado: {}", request.getEmail());
-            throw new BusinessException("El email ya está registrado");
+        // Verificar que el usuario actual es ADMIN
+        Usuario adminActual = usuarioRepository.findByEmail(adminEmail)
+                .orElseThrow(() -> new UnauthorizedException("Usuario administrador no encontrado"));
+        
+        if (adminActual.getRole() != Role.ADMIN) {
+            log.warn("Usuario {} sin permisos intentó registrar nuevo usuario", adminEmail);
+            throw new ForbiddenException(
+                "Solo los administradores pueden registrar nuevos usuarios. " +
+                "Su rol actual es: " + adminActual.getRole()
+            );
         }
         
-        // 2. Crear nuevo usuario
+        // Verificar si el email ya existe
+        if (usuarioRepository.existsByEmail(request.getEmail())) {
+            log.warn("Intento de registro con email duplicado: {}", request.getEmail());
+            throw new BusinessException("El email ya está registrado: " + request.getEmail());
+        }
+        
+        // Determinar el rol del nuevo usuario
+        Role nuevoRol = Role.USER; // Por defecto USER
+        if (request.getRole() != null) {
+            try {
+                nuevoRol = Role.valueOf(request.getRole().toUpperCase());
+            } catch (IllegalArgumentException e) {
+                throw new BusinessException("Rol inválido. Use USER o ADMIN");
+            }
+        }
+        
+        // Solo ADMIN puede crear otro ADMIN
+        if (nuevoRol == Role.ADMIN && adminActual.getRole() != Role.ADMIN) {
+            throw new ForbiddenException(
+                "Solo un administrador puede crear otro administrador."
+            );
+        }
+        
+        // Crear nuevo usuario
         Usuario nuevoUsuario = Usuario.builder()
                 .email(request.getEmail())
                 .password(passwordEncoder.encode(request.getPassword()))
                 .nombre(request.getNombre())
                 .apellido(request.getApellido())
-                .role(Role.USER)  // Por defecto, rol USER
+                .role(nuevoRol)
                 .build();
         
-        // 3. Guardar en la base de datos
         nuevoUsuario = usuarioRepository.save(nuevoUsuario);
-        log.info("Usuario registrado exitosamente: {}", nuevoUsuario.getEmail());
         
-        // 4. Generar token para auto-login
-        String token = jwtService.generateToken(nuevoUsuario);
-        Long expiresIn = jwtService.getExpirationTime();
+        log.info("Usuario {} registrado exitosamente con rol {} por admin {}", 
+                nuevoUsuario.getEmail(), nuevoRol, adminEmail);
         
-        // 5. Retornar respuesta con token
-        return new AuthResponseDTO(
-            token,
-            expiresIn,
-            nuevoUsuario.getEmail(),
-            nuevoUsuario.getNombre(),
-            nuevoUsuario.getApellido(),
-            nuevoUsuario.getRole().name()
-        );
+        // No generar token para el nuevo usuario, solo confirmar creación
+        return AuthResponseDTO.builder()
+                .token(null)  // No devolver token
+                .email(nuevoUsuario.getEmail())
+                .nombreCompleto(nuevoUsuario.getNombre() + " " + nuevoUsuario.getApellido())
+                .role(nuevoUsuario.getRole().name())
+                .issuedAt(LocalDateTime.now())
+                .build();
     }
     
-    // ========================================
-    // CAMBIAR CONTRASEÑA
-    // ========================================
-    
     /**
-     * Cambia la contraseña de un usuario.
-     * 
-     * @param email Email del usuario
-     * @param oldPassword Contraseña actual
-     * @param newPassword Nueva contraseña
-     * @throws UnauthorizedException si la contraseña actual es incorrecta
+     * Cambiar contraseña 
      */
-    public void cambiarPassword(String email, String oldPassword, String newPassword) {
-        log.info("Cambio de contraseña solicitado para: {}", email);
+    public void cambiarPassword(ChangePasswordRequestDTO request, String userEmail) {
+        log.info("Cambio de contraseña solicitado para: {}", userEmail);
         
-        Usuario usuario = usuarioRepository.findByEmail(email)
+        Usuario usuario = usuarioRepository.findByEmail(userEmail)
                 .orElseThrow(() -> new UsernameNotFoundException("Usuario no encontrado"));
         
         // Verificar contraseña actual
-        if (!passwordEncoder.matches(oldPassword, usuario.getPassword())) {
-            log.warn("Contraseña actual incorrecta para usuario: {}", email);
-            throw new UnauthorizedException("La contraseña actual es incorrecta");
+        if (!passwordEncoder.matches(request.getOldPassword(), usuario.getPassword())) {
+            log.warn("Contraseña actual incorrecta para usuario: {}", userEmail);
+            throw new UnauthorizedException(
+                "La contraseña actual es incorrecta. Por favor, verifique e intente nuevamente."
+            );
+        }
+        
+        // Validar que la nueva contraseña sea diferente
+        if (request.getOldPassword().equals(request.getNewPassword())) {
+            throw new BusinessException(
+                "La nueva contraseña debe ser diferente a la actual."
+            );
         }
         
         // Actualizar contraseña
-        usuario.setPassword(passwordEncoder.encode(newPassword));
+        usuario.setPassword(passwordEncoder.encode(request.getNewPassword()));
         usuarioRepository.save(usuario);
         
-        log.info("Contraseña actualizada exitosamente para: {}", email);
+        log.info("Contraseña actualizada exitosamente para: {}", userEmail);
     }
     
     // ========================================
@@ -227,6 +240,18 @@ public class AuthService implements UserDetailsService {
                 .orElseThrow(() -> new UsernameNotFoundException("Usuario no encontrado"));
     }
     
+    /**
+     * Obtener el usuario actual desde el contexto de seguridad
+     */
+    public String getUsuarioActual() {
+        Authentication authentication = SecurityContextHolder.getContext().getAuthentication();
+        if (authentication != null && authentication.isAuthenticated()) {
+            return authentication.getName();  // Retorna el email del usuario
+        }
+        return "Sistema";
+    }
+
+
     /**
      * Verifica si un usuario tiene un rol específico.
      * 

@@ -318,4 +318,216 @@ public class EmailService {
             log.error("No se pudo enviar email de error: {}", e.getMessage());
         }
     }
+
+    /**
+     * Enviar notificación personalizada a un email específico.
+     */
+    @Async
+    public CompletableFuture<Boolean> enviarNotificacionPersonalizada(
+            String emailDestino, 
+            String asunto, 
+            String mensaje) {
+        
+        log.info("Enviando notificación personalizada a: {}", emailDestino);
+        
+        try {
+            SimpleMailMessage message = new SimpleMailMessage();
+            message.setFrom(fromEmail);
+            message.setTo(emailDestino);
+            message.setSubject(asunto);
+            message.setText(mensaje);
+            
+            mailSender.send(message);
+            
+            log.info("Email enviado exitosamente a: {}", emailDestino);
+            return CompletableFuture.completedFuture(true);
+            
+        } catch (Exception e) {
+            log.error("Error enviando email a {}: {}", emailDestino, e.getMessage());
+            return CompletableFuture.completedFuture(false);
+        }
+    }
+
+    /**
+     * Enviar estadísticas a un email específico.
+     */
+    @Async
+    public CompletableFuture<Boolean> enviarNotificacionEstadisticasCalculadas(
+            EstadisticasClienteDTO estadisticas, 
+            String emailDestino) {
+        
+        log.info("Enviando estadísticas a: {}", emailDestino);
+        
+        try {
+            MimeMessage message = mailSender.createMimeMessage();
+            MimeMessageHelper helper = new MimeMessageHelper(message, true, "UTF-8");
+            
+            helper.setFrom(fromEmail);
+            helper.setTo(emailDestino);
+            helper.setSubject("📊 Estadísticas de Clientes - " + LocalDateTime.now().format(formatter));
+            
+            String contenidoHtml = construirEmailEstadisticas(estadisticas);
+            helper.setText(contenidoHtml, true);
+            
+            mailSender.send(message);
+            
+            log.info("Estadísticas enviadas a: {}", emailDestino);
+            return CompletableFuture.completedFuture(true);
+            
+        } catch (Exception e) {
+            log.error("Error enviando estadísticas a {}: {}", emailDestino, e.getMessage());
+            return CompletableFuture.completedFuture(false);
+        }
+    }
+    
+    /**
+     * Enviar listado de clientes.
+     */
+    @Async
+    public void enviarListadoClientes(List<ClienteResponseDTO> clientes, String emailDestino) {
+        log.info("Enviando listado de {} clientes a: {}", clientes.size(), emailDestino);
+        
+        try {
+            MimeMessage message = mailSender.createMimeMessage();
+            MimeMessageHelper helper = new MimeMessageHelper(message, true, "UTF-8");
+            
+            helper.setFrom(fromEmail);
+            helper.setTo(emailDestino);
+            helper.setSubject("📋 Listado de Clientes - Total: " + clientes.size());
+            
+            StringBuilder html = new StringBuilder();
+            html.append("<html><body style='font-family: Arial, sans-serif;'>");
+            html.append("<h2>Listado de Clientes Activos</h2>");
+            html.append("<p>Total de clientes: ").append(clientes.size()).append("</p>");
+            html.append("<table style='border-collapse: collapse; width: 100%;'>");
+            html.append("<thead style='background-color: #f2f2f2;'>");
+            html.append("<tr>");
+            html.append("<th style='border: 1px solid #ddd; padding: 8px;'>ID</th>");
+            html.append("<th style='border: 1px solid #ddd; padding: 8px;'>Nombre</th>");
+            html.append("<th style='border: 1px solid #ddd; padding: 8px;'>Apellido</th>");
+            html.append("<th style='border: 1px solid #ddd; padding: 8px;'>Edad</th>");
+            html.append("<th style='border: 1px solid #ddd; padding: 8px;'>Fecha Nacimiento</th>");
+            html.append("<th style='border: 1px solid #ddd; padding: 8px;'>Años Restantes</th>");
+            html.append("</tr></thead><tbody>");
+            
+            for (ClienteResponseDTO cliente : clientes) {
+                html.append("<tr>");
+                html.append("<td style='border: 1px solid #ddd; padding: 8px;'>").append(cliente.getId()).append("</td>");
+                html.append("<td style='border: 1px solid #ddd; padding: 8px;'>").append(cliente.getNombre()).append("</td>");
+                html.append("<td style='border: 1px solid #ddd; padding: 8px;'>").append(cliente.getApellido()).append("</td>");
+                html.append("<td style='border: 1px solid #ddd; padding: 8px;'>").append(cliente.getEdad()).append("</td>");
+                html.append("<td style='border: 1px solid #ddd; padding: 8px;'>").append(cliente.getFechaNacimiento()).append("</td>");
+                html.append("<td style='border: 1px solid #ddd; padding: 8px;'>").append(cliente.getAñosRestantes()).append("</td>");
+                html.append("</tr>");
+            }
+            
+            html.append("</tbody></table>");
+            html.append("<p style='margin-top: 20px; color: #666;'>Generado: ").append(LocalDateTime.now().format(formatter)).append("</p>");
+            html.append("</body></html>");
+            
+            helper.setText(html.toString(), true);
+            mailSender.send(message);
+            
+            log.info("Listado enviado exitosamente a: {}", emailDestino);
+            
+        } catch (Exception e) {
+            log.error("Error enviando listado a {}: {}", emailDestino, e.getMessage());
+        }
+    }
+    
+    /**
+     * Notificación de actualización de cliente.
+     */
+    @Async
+    public void enviarNotificacionActualizacion(
+            ClienteResponseDTO cliente, 
+            String usuarioActualizador, 
+            String emailDestino) {
+        
+        log.info("Enviando notificación de actualización a: {}", emailDestino);
+        
+        try {
+            SimpleMailMessage message = new SimpleMailMessage();
+            message.setFrom(fromEmail);
+            message.setTo(emailDestino);
+            message.setSubject("✏️ Cliente Actualizado - " + cliente.getNombre() + " " + cliente.getApellido());
+            
+            String contenido = String.format("""
+                Cliente Actualizado
+                ==================
+                
+                ID: %d
+                Nombre: %s %s
+                Edad: %d años
+                Fecha de Nacimiento: %s
+                
+                Actualizado por: %s
+                Fecha de actualización: %s
+                
+                Este es un mensaje automático del sistema.
+                """,
+                cliente.getId(),
+                cliente.getNombre(),
+                cliente.getApellido(),
+                cliente.getEdad(),
+                cliente.getFechaNacimiento(),
+                usuarioActualizador,
+                LocalDateTime.now().format(formatter)
+            );
+            
+            message.setText(contenido);
+            mailSender.send(message);
+            
+            log.info("Notificación de actualización enviada a: {}", emailDestino);
+            
+        } catch (Exception e) {
+            log.error("Error enviando notificación de actualización: {}", e.getMessage());
+        }
+    }
+    
+    /**
+     * Notificación de eliminación de cliente.
+     */
+    @Async
+    public void enviarNotificacionEliminacion(
+            Long clienteId, 
+            String adminEliminador, 
+            String emailDestino) {
+        
+        log.info("Enviando notificación de eliminación a: {}", emailDestino);
+        
+        try {
+            SimpleMailMessage message = new SimpleMailMessage();
+            message.setFrom(fromEmail);
+            message.setTo(emailDestino);
+            message.setSubject("🗑️ Cliente Eliminado - ID: " + clienteId);
+            
+            String contenido = String.format("""
+                Cliente Eliminado del Sistema
+                =============================
+                
+                ID del Cliente: %d
+                
+                Eliminado por: %s (ADMINISTRADOR)
+                Fecha de eliminación: %s
+                
+                Nota: Esta es una eliminación lógica (soft delete).
+                El registro permanece en la base de datos pero marcado como inactivo.
+                
+                Este es un mensaje automático del sistema.
+                """,
+                clienteId,
+                adminEliminador,
+                LocalDateTime.now().format(formatter)
+            );
+            
+            message.setText(contenido);
+            mailSender.send(message);
+            
+            log.info("Notificación de eliminación enviada a: {}", emailDestino);
+            
+        } catch (Exception e) {
+            log.error("Error enviando notificación de eliminación: {}", e.getMessage());
+        }
+    }
 }
