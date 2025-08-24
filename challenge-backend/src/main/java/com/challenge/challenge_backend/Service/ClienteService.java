@@ -257,36 +257,43 @@ public class ClienteService {
     // ========================================
 
     /**
-     * Actualiza los datos de un cliente existente.
-     * 
-     * @param id      ID del cliente a actualizar
-     * @param request DTO con los nuevos datos
-     * @return DTO con la información actualizada
-     * @throws ResourceNotFoundException si el cliente no existe
+     * Actualizar cliente con auditoría y email opcional.
      */
-    @CacheEvict(value = { "estadisticas", "clientes" }, allEntries = true)
-    public ClienteResponseDTO actualizarCliente(Long id, ClienteRequestDTO request) {
-        log.info("Actualizando cliente con ID: {}", id);
-
-        // 1. Buscar el cliente
+    @CacheEvict(value = {"estadisticas", "clientes"}, allEntries = true)
+    public ClienteResponseDTO actualizarCliente(Long id, ClienteRequestDTO request, String emailDestino) {
+        String usuarioActualizador = authService.getUsuarioActual();
+        log.info("Usuario {} actualizando cliente con ID: {}", usuarioActualizador, id);
+        
         Cliente cliente = clienteRepository.findByIdAndActivoTrue(id)
                 .orElseThrow(() -> new ResourceNotFoundException("Cliente no encontrado con ID: " + id));
-
-        // 2. Validar coherencia de datos
+        
         validarCoherenciaEdadFechaNacimiento(request.getEdad(), request.getFechaNacimiento());
-
-        // 3. Actualizar los campos
+        
+        // Actualizar campos
         cliente.setNombre(request.getNombre());
         cliente.setApellido(request.getApellido());
         cliente.setEdad(request.getEdad());
         cliente.setFechaNacimiento(request.getFechaNacimiento());
-
-        // 4. Guardar cambios
+        cliente.setActualizadoPor(usuarioActualizador);  // Registrar quién actualizó
+        
         cliente = clienteRepository.save(cliente);
-        log.info("Cliente actualizado exitosamente");
-
-        // 5. Retornar DTO actualizado
-        return convertirAResponseDTO(cliente);
+        log.info("Cliente {} actualizado exitosamente por {}", id, usuarioActualizador);
+        
+        ClienteResponseDTO response = convertirAResponseDTO(cliente);
+        
+        // Enviar notificación si se especificó email
+        if (emailDestino != null && !emailDestino.isEmpty() && emailService != null) {
+            emailService.enviarNotificacionActualizacion(response, usuarioActualizador, emailDestino);
+        }
+        
+        return response;
+    }
+    
+    /**
+     * Sobrecarga para mantener compatibilidad sin email
+     */
+    public ClienteResponseDTO actualizarCliente(Long id, ClienteRequestDTO request) {
+        return actualizarCliente(id, request, null);
     }
 
     // ========================================
@@ -294,23 +301,34 @@ public class ClienteService {
     // ========================================
 
     /**
-     * Elimina lógicamente un cliente (soft delete).
-     * 
-     * @param id ID del cliente a eliminar
-     * @throws ResourceNotFoundException si el cliente no existe
+     * Eliminar cliente con notificación opcional.
      */
-    @CacheEvict(value = { "estadisticas", "clientes" }, allEntries = true)
-    public void eliminarCliente(Long id) {
-        log.info("Eliminando cliente con ID: {}", id);
-
+    @CacheEvict(value = {"estadisticas", "clientes"}, allEntries = true)
+    public void eliminarCliente(Long id, String emailDestino) {
+        String usuarioEliminador = authService.getUsuarioActual();
+        log.info("Usuario {} eliminando cliente con ID: {}", usuarioEliminador, id);
+        
         Cliente cliente = clienteRepository.findByIdAndActivoTrue(id)
                 .orElseThrow(() -> new ResourceNotFoundException("Cliente no encontrado con ID: " + id));
-
-        // Soft delete - solo marcar como inactivo
+        
+        // Soft delete
         cliente.setActivo(false);
+        cliente.setActualizadoPor(usuarioEliminador);  // Registrar quién eliminó
         clienteRepository.save(cliente);
-
-        log.info("Cliente eliminado (soft delete) exitosamente");
+        
+        log.info("Cliente {} eliminado (soft delete) exitosamente por {}", id, usuarioEliminador);
+        
+        // Enviar notificación si se especificó email
+        if (emailDestino != null && !emailDestino.isEmpty() && emailService != null) {
+            emailService.enviarNotificacionEliminacion(id, usuarioEliminador, emailDestino);
+        }
+    }
+    
+    /**
+     * Sobrecarga para mantener compatibilidad sin email
+     */
+    public void eliminarCliente(Long id) {
+        eliminarCliente(id, null);
     }
 
     // ========================================
@@ -447,18 +465,15 @@ public class ClienteService {
     }
 
     /**
-     * Crea múltiples clientes en una sola operación.
-     * 
-     * Procesa cada cliente individualmente y continúa aunque algunos fallen.
-     * Envía notificación por email al finalizar con el resumen.
-     * 
-     * @param clientesRequest Lista de DTOs con datos de clientes a crear
-     * @return DTO con resumen del procesamiento
+     * Crea múltiples clientes con notificación por email opcional.
      */
     @Transactional
     @CacheEvict(value = {"estadisticas", "clientes"}, allEntries = true)
-    public BatchResponseDTO crearClientesMasivo(List<ClienteRequestDTO> clientesRequest) {
+    public BatchResponseDTO crearClientesMasivo(List<ClienteRequestDTO> clientesRequest, String emailDestino) {
         log.info("Iniciando creación masiva de {} clientes", clientesRequest.size());
+        
+        String usuarioCreador = authService.getUsuarioActual();
+        log.info("Usuario {} ejecutando creación masiva", usuarioCreador);
         
         List<ClienteResponseDTO> clientesCreados = new ArrayList<>();
         List<ErrorDetalleDTO> errores = new ArrayList<>();
@@ -466,14 +481,11 @@ public class ClienteService {
         int indice = 0;
         for (ClienteRequestDTO request : clientesRequest) {
             try {
-                // Intentar crear cada cliente
                 ClienteResponseDTO clienteCreado = crearClienteIndividual(request);
                 clientesCreados.add(clienteCreado);
-                
                 log.debug("Cliente {} creado exitosamente en batch", indice);
                 
             } catch (BusinessException e) {
-                // Capturar errores de negocio (duplicados, validación)
                 ErrorDetalleDTO error = ErrorDetalleDTO.builder()
                         .indice(indice)
                         .nombre(request.getNombre())
@@ -485,7 +497,6 @@ public class ClienteService {
                 log.warn("Error creando cliente {} en batch: {}", indice, e.getMessage());
                 
             } catch (Exception e) {
-                // Capturar cualquier otro error inesperado
                 ErrorDetalleDTO error = ErrorDetalleDTO.builder()
                         .indice(indice)
                         .nombre(request.getNombre())
@@ -500,7 +511,6 @@ public class ClienteService {
             indice++;
         }
         
-        // Construir respuesta con resumen - SINTAXIS CORRECTA
         BatchResponseDTO resultado = BatchResponseDTO.builder()
                 .total(clientesRequest.size())
                 .exitosos(clientesCreados.size())
@@ -510,16 +520,18 @@ public class ClienteService {
                 .errores(errores)
                 .build();
         
-        log.info("Creación masiva completada: {} exitosos, {} fallidos de {} total",
-                resultado.getExitosos(), resultado.getFallidos(), resultado.getTotal());
+        log.info("Creación masiva completada por {}: {} exitosos, {} fallidos de {} total",
+                usuarioCreador, resultado.getExitosos(), resultado.getFallidos(), resultado.getTotal());
         
-        // Enviar notificación asíncrona con el resumen (si el emailService existe)
-        if (emailService != null) {
-            enviarNotificacionBatch(resultado);
+        // Enviar notificación si se especificó email
+        if (emailDestino != null && !emailDestino.isEmpty() && emailService != null) {
+            enviarNotificacionBatchConEmail(resultado, usuarioCreador, emailDestino);
         }
         
         return resultado;
     }
+
+    
     
     /**
      * Método interno para crear un cliente individual sin notificación.
@@ -559,36 +571,46 @@ public class ClienteService {
         return convertirAResponseDTO(cliente);
     }
     
-    /**
-     * Envía notificación por email del resultado del batch.
+   /**
+     * Enviar notificación de batch con detalles.
      */
-    private void enviarNotificacionBatch(BatchResponseDTO resultado) {
-        if (emailService != null) {
-            // Crear resumen para el email
-            String resumen = String.format(
-                "Procesamiento Batch Completado\n" +
-                "============================\n" +
-                "Total procesados: %d\n" +
-                "Exitosos: %d\n" +
-                "Fallidos: %d\n" +
-                "Fecha: %s\n",
-                resultado.getTotal(),
-                resultado.getExitosos(),
-                resultado.getFallidos(),
-                resultado.getFechaProcesamiento()
-            );
+    private void enviarNotificacionBatchConEmail(BatchResponseDTO resultado, String usuarioCreador, String emailDestino) {
+        try {
+            StringBuilder mensaje = new StringBuilder();
+            mensaje.append("Procesamiento Batch Completado\n");
+            mensaje.append("================================\n\n");
+            mensaje.append("Ejecutado por: ").append(usuarioCreador).append("\n");
+            mensaje.append("Total procesados: ").append(resultado.getTotal()).append("\n");
+            mensaje.append("Exitosos: ").append(resultado.getExitosos()).append("\n");
+            mensaje.append("Fallidos: ").append(resultado.getFallidos()).append("\n");
+            mensaje.append("Fecha: ").append(resultado.getFechaProcesamiento()).append("\n\n");
             
-            // Si hay errores, incluirlos
-            if (!resultado.getErrores().isEmpty()) {
-                resumen += "\nErrores encontrados:\n";
-                for (ErrorDetalleDTO error : resultado.getErrores()) {
-                    resumen += String.format("- Cliente %s %s: %s\n", 
-                            error.getNombre(), error.getApellido(), error.getError());
+            if (resultado.getExitosos() > 0) {
+                mensaje.append("CLIENTES CREADOS EXITOSAMENTE:\n");
+                mensaje.append("-------------------------------\n");
+                for (ClienteResponseDTO cliente : resultado.getClientesCreados()) {
+                    mensaje.append(String.format("- ID: %d | %s %s | Edad: %d\n",
+                            cliente.getId(), cliente.getNombre(), cliente.getApellido(), cliente.getEdad()));
                 }
             }
             
-            // Enviar email asíncrono
-            emailService.enviarNotificacionError("crearClientesMasivo", resumen);
+            if (resultado.getFallidos() > 0) {
+                mensaje.append("\nERRORES ENCONTRADOS:\n");
+                mensaje.append("--------------------\n");
+                for (ErrorDetalleDTO error : resultado.getErrores()) {
+                    mensaje.append(String.format("- Índice %d | %s %s | Error: %s\n",
+                            error.getIndice(), error.getNombre(), error.getApellido(), error.getError()));
+                }
+            }
+            
+            emailService.enviarNotificacionPersonalizada(
+                emailDestino,
+                "Creación Masiva de Clientes - Resumen",
+                mensaje.toString()
+            );
+            
+        } catch (Exception e) {
+            log.error("Error enviando notificación batch: {}", e.getMessage());
         }
     }
     
@@ -602,7 +624,24 @@ public class ClienteService {
         
         log.info("Iniciando procesamiento ASÍNCRONO de {} clientes", clientesRequest.size());
         
-        BatchResponseDTO resultado = crearClientesMasivo(clientesRequest);
+        // Llamar al método sin email (null)
+        BatchResponseDTO resultado = crearClientesMasivo(clientesRequest, null);
+        
+        return CompletableFuture.completedFuture(resultado);
+    }
+    
+    /**
+     * Método asíncrono con email destino.
+     */
+    @Async
+    public CompletableFuture<BatchResponseDTO> crearClientesMasivoAsync(
+            List<ClienteRequestDTO> clientesRequest,
+            String emailDestino) {
+        
+        log.info("Iniciando procesamiento ASÍNCRONO de {} clientes con notificación a {}", 
+                clientesRequest.size(), emailDestino);
+        
+        BatchResponseDTO resultado = crearClientesMasivo(clientesRequest, emailDestino);
         
         return CompletableFuture.completedFuture(resultado);
     }

@@ -214,12 +214,12 @@ public class ClienteController {
     }
 
     /**
-     * Actualizar cliente - Con auditoría.
+     * Actualizar cliente con email opcional.
      */
     @PutMapping("/clientes/{id}")
     @Operation(
         summary = "Actualizar cliente",
-        description = "Actualiza un cliente. Requiere autenticación."
+        description = "Actualiza un cliente existente. Opción de enviar notificación por email."
     )
     @PreAuthorize("hasAnyRole('USER', 'ADMIN')")
     public ResponseEntity<ApiResponseDTO<ClienteResponseDTO>> actualizarCliente(
@@ -228,7 +228,6 @@ public class ClienteController {
             @RequestParam(required = false) String emailDestino,
             Authentication authentication) {
         
-        // Obtener el email del usuario actual
         String usuarioActual = authentication.getPrincipal().toString();
         if (authentication.getPrincipal() instanceof UserDetails) {
             usuarioActual = ((UserDetails) authentication.getPrincipal()).getUsername();
@@ -236,16 +235,12 @@ public class ClienteController {
         
         log.info("PUT /api/clientes/{} - Usuario {} actualizando cliente", id, usuarioActual);
         
-        ClienteResponseDTO cliente = clienteService.actualizarCliente(id, request);
+        ClienteResponseDTO cliente = clienteService.actualizarCliente(id, request, emailDestino);
         
         String mensaje = String.format(
             "Cliente actualizado exitosamente por el usuario: %s",
             usuarioActual
         );
-        
-        if (emailDestino != null) {
-            emailService.enviarNotificacionActualizacion(cliente, usuarioActual, emailDestino);
-        }
         
         ApiResponseDTO<ClienteResponseDTO> response = ApiResponseDTO.success(
             cliente,
@@ -256,12 +251,12 @@ public class ClienteController {
     }
 
     /**
-     * Eliminar cliente - Solo ADMIN.
+     * Eliminar cliente con email opcional.
      */
     @DeleteMapping("/clientes/{id}")
     @Operation(
         summary = "Eliminar cliente",
-        description = "Elimina un cliente. Solo ADMIN."
+        description = "Elimina un cliente (soft delete). Solo ADMIN. Opción de enviar notificación por email."
     )
     @PreAuthorize("hasRole('ADMIN')")
     public ResponseEntity<ApiResponseDTO<Void>> eliminarCliente(
@@ -269,7 +264,6 @@ public class ClienteController {
             @RequestParam(required = false) String emailDestino,
             Authentication authentication) {
         
-        // Obtener el email del usuario actual
         String adminActual = authentication.getPrincipal().toString();
         if (authentication.getPrincipal() instanceof UserDetails) {
             adminActual = ((UserDetails) authentication.getPrincipal()).getUsername();
@@ -277,11 +271,7 @@ public class ClienteController {
         
         log.info("DELETE /api/clientes/{} - Admin {} eliminando cliente", id, adminActual);
         
-        clienteService.eliminarCliente(id);
-        
-        if (emailDestino != null) {
-            emailService.enviarNotificacionEliminacion(id, adminActual, emailDestino);
-        }
+        clienteService.eliminarCliente(id, emailDestino);
         
         ApiResponseDTO<Void> response = ApiResponseDTO.successMessage(
             String.format("Cliente eliminado exitosamente por el administrador: %s", adminActual)
@@ -295,49 +285,53 @@ public class ClienteController {
     // ========================================
 
     /**
-     * Endpoint para crear múltiples clientes en una sola petición.
-     * 
-     * SOLO ADMINISTRADORES pueden usar este endpoint.
-     * Procesa todos los clientes y retorna un resumen con éxitos y errores.
+     * Crear múltiples clientes con email opcional.
      */
     @PostMapping("/creaclientes/batch")
-    @Operation(summary = "Crear múltiples clientes", description = "Crea varios clientes en una sola operación. Solo disponible para ADMIN. "
-            +
-            "Procesa todos los clientes y retorna un resumen detallado.")
-    @ApiResponses(value = {
-            @ApiResponse(responseCode = "207", description = "Multi-Status: Procesamiento completado con detalles", content = @Content(schema = @Schema(implementation = BatchResponseDTO.class))),
-            @ApiResponse(responseCode = "400", description = "Datos inválidos en la petición"),
-            @ApiResponse(responseCode = "403", description = "Sin permisos - Solo ADMIN puede crear clientes masivamente")
-    })
-    @PreAuthorize("hasRole('ADMIN')") // Solo ADMIN puede ejecutar esto
+    @Operation(
+        summary = "Crear múltiples clientes",
+        description = "Crea varios clientes en una sola operación. Solo ADMIN. Opción de enviar resumen por email."
+    )
+    @PreAuthorize("hasRole('ADMIN')")
     public ResponseEntity<ApiResponseDTO<BatchResponseDTO>> crearClientesMasivo(
-            @Parameter(description = "Lista de clientes a crear (máximo 100)") @Valid @RequestBody BatchClienteRequestDTO request) {
-
-        log.info("POST /api/creaclientes/batch - Creación masiva de {} clientes",
-                request.getClientes().size());
-
-        // Validar límite de clientes por batch
+            @Valid @RequestBody BatchClienteRequestDTO request,
+            @RequestParam(required = false) String emailDestino,
+            Authentication authentication) {
+        
+        String adminEmail = authentication.getPrincipal().toString();
+        if (authentication.getPrincipal() instanceof UserDetails) {
+            adminEmail = ((UserDetails) authentication.getPrincipal()).getUsername();
+        }
+        
+        log.info("POST /api/creaclientes/batch - Admin {} creando {} clientes", 
+                adminEmail, request.getClientes().size());
+        
         if (request.getClientes().size() > 100) {
             throw new BusinessException("El límite máximo es 100 clientes por batch");
         }
-
-        BatchResponseDTO resultado = clienteService.crearClientesMasivo(request.getClientes());
-
+        
+        BatchResponseDTO resultado = clienteService.crearClientesMasivo(
+            request.getClientes(), 
+            emailDestino
+        );
+        
         String mensaje = String.format(
-                "Procesamiento completado: %d exitosos, %d fallidos de %d total",
-                resultado.getExitosos(),
-                resultado.getFallidos(),
-                resultado.getTotal());
-
+            "Procesamiento completado por %s: %d exitosos, %d fallidos de %d total",
+            adminEmail,
+            resultado.getExitosos(), 
+            resultado.getFallidos(), 
+            resultado.getTotal()
+        );
+        
         ApiResponseDTO<BatchResponseDTO> response = ApiResponseDTO.success(
-                resultado,
-                mensaje);
-
-        // Status 207 (Multi-Status) indica que algunos pueden haber fallado
-        HttpStatus status = resultado.getFallidos() > 0
-                ? HttpStatus.MULTI_STATUS
-                : HttpStatus.CREATED;
-
+            resultado,
+            mensaje
+        );
+        
+        HttpStatus status = resultado.getFallidos() > 0 
+            ? HttpStatus.MULTI_STATUS 
+            : HttpStatus.CREATED;
+        
         return new ResponseEntity<>(response, status);
     }
 
@@ -377,4 +371,6 @@ public class ClienteController {
 
         return ResponseEntity.ok(response);
     }
+
+    
 }

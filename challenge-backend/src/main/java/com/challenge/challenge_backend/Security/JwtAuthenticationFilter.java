@@ -42,49 +42,55 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
             HttpServletResponse response,
             FilterChain filterChain) throws ServletException, IOException {
         
+        final String requestURI = request.getRequestURI();
+        log.debug("Procesando request a: {}", requestURI);
+        
         try {
-            // 1. Extraer el token del header
+            // Extraer el token del header
             String token = extractTokenFromRequest(request);
             
-            // 2. Si no hay token, continuar sin autenticación
-            if (token == null) {
-                filterChain.doFilter(request, response);
-                return;
-            }
-            
-            // 3. Extraer el username del token
-            String username = jwtService.extractUsername(token);
-            
-            // 4. Si el username es válido y no hay autenticación actual
-            if (StringUtils.hasText(username) && 
-                SecurityContextHolder.getContext().getAuthentication() == null) {
+            if (token != null) {
+                log.debug("Token encontrado, validando...");
                 
-                // 5. Cargar los detalles del usuario
-                UserDetails userDetails = userDetailsService.loadUserByUsername(username);
+                // Extraer el username del token
+                String username = jwtService.extractUsername(token);
                 
-                // 6. Validar el token
-                if (jwtService.isTokenValid(token, userDetails)) {
+                // Si el username es válido y no hay autenticación actual
+                if (StringUtils.hasText(username) && 
+                    SecurityContextHolder.getContext().getAuthentication() == null) {
                     
-                    // 7. Crear el objeto de autenticación
-                    UsernamePasswordAuthenticationToken authToken = 
-                        new UsernamePasswordAuthenticationToken(
-                            userDetails,
-                            null,
-                            userDetails.getAuthorities()
+                    log.debug("Cargando usuario: {}", username);
+                    
+                    // Cargar los detalles del usuario
+                    UserDetails userDetails = userDetailsService.loadUserByUsername(username);
+                    
+                    // Validar el token
+                    if (jwtService.isTokenValid(token, userDetails)) {
+                        
+                        // Crear el objeto de autenticación
+                        UsernamePasswordAuthenticationToken authToken = 
+                            new UsernamePasswordAuthenticationToken(
+                                userDetails,
+                                null,
+                                userDetails.getAuthorities()
+                            );
+                        
+                        // Establecer detalles adicionales
+                        authToken.setDetails(
+                            new WebAuthenticationDetailsSource().buildDetails(request)
                         );
-                    
-                    // 8. Establecer detalles adicionales
-                    authToken.setDetails(
-                        new WebAuthenticationDetailsSource().buildDetails(request)
-                    );
-                    
-                    // 9. Establecer la autenticación en el contexto
-                    SecurityContextHolder.getContext().setAuthentication(authToken);
-                    
-                    log.debug("Usuario autenticado: {}", username);
-                } else {
-                    log.debug("Token inválido para usuario: {}", username);
+                        
+                        // Establecer la autenticación en el contexto
+                        SecurityContextHolder.getContext().setAuthentication(authToken);
+                        
+                        log.debug("Usuario autenticado exitosamente: {} con roles: {}", 
+                                username, userDetails.getAuthorities());
+                    } else {
+                        log.warn("Token inválido para usuario: {}", username);
+                    }
                 }
+            } else {
+                log.debug("No se encontró token en el request");
             }
             
         } catch (Exception e) {
@@ -92,42 +98,31 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
             // No lanzar excepción, solo continuar sin autenticación
         }
         
-        // 10. Continuar con la cadena de filtros
+        // Continuar con la cadena de filtros
         filterChain.doFilter(request, response);
     }
     
     /**
      * Extrae el token JWT del header Authorization.
-     * 
-     * @param request HTTP request
-     * @return Token JWT sin el prefijo "Bearer " o null si no existe
      */
     private String extractTokenFromRequest(HttpServletRequest request) {
-        // Obtener el header Authorization
         String bearerToken = request.getHeader("Authorization");
         
-        // Verificar que existe y tiene el formato correcto
         if (StringUtils.hasText(bearerToken) && bearerToken.startsWith("Bearer ")) {
-            // Retornar el token sin el prefijo "Bearer "
-            return bearerToken.substring(7);
+            String token = bearerToken.substring(7);
+            log.debug("Token extraído exitosamente");
+            return token;
         }
         
         return null;
     }
     
     /**
-     * Determina si este filtro debe ejecutarse para la request actual.
-     * 
-     * @return true si el filtro debe ejecutarse
+     * Procesar todos los requests
      */
     @Override
     protected boolean shouldNotFilter(HttpServletRequest request) throws ServletException {
-        // Puedes excluir ciertas rutas del filtro si lo deseas
-        String path = request.getRequestURI();
-        
-        // Ejemplo: No filtrar rutas públicas
-        return path.startsWith("/api/auth/") || 
-               path.startsWith("/swagger-ui/") ||
-               path.startsWith("/v3/api-docs/");
+        // Retornar false para procesar TODOS los requests
+        return false;
     }
 }

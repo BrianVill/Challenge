@@ -1,6 +1,6 @@
 package com.challenge.challenge_backend.Config;
 
-import com.challenge.challenge_backend.Service.AuthService;
+
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.CommandLineRunner;
@@ -16,7 +16,7 @@ import org.springframework.context.annotation.Configuration;
 @Slf4j
 public class DataInitializer {
     
-    private final AuthService authService;
+    private final com.challenge.challenge_backend.Service.AuthService authService;
     
     @Bean
     CommandLineRunner init() {
