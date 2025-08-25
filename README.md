@@ -251,52 +251,209 @@ La colección incluye:
 - Ejemplos de requests y responses
 - Tests automáticos para validación
 
-### Guía de Pruebas Paso a Paso
+# 📚 Documentación de Endpoints
 
-#### 1. **Obtener Token de Autenticación**
-```bash
-curl -X POST http://challenge-backend.us-east-1.elasticbeanstalk.com/api/auth/login \
-  -H "Content-Type: application/json" \
-  -d '{
-    "email": "admin@challenge.com",
-    "password": "Admin123!"
-  }'
+## 🔐 Autenticación
+
+### Login
+```http
+POST /api/auth/login
+```
+```json
+{
+  "email": "admin@challenge.com",
+  "password": "Admin123!"
+}
+```
+**Respuesta:** Token JWT (duración: 24 horas)
+
+---
+
+## 👥 Endpoints Principales (Requeridos)
+
+### 1️⃣ Crear Cliente
+```http
+POST /api/creacliente
+Headers: Authorization: Bearer {token}
+```
+```json
+{
+  "nombre": "Juan",        // 2-100 caracteres, solo letras
+  "apellido": "Pérez",     // 2-100 caracteres, solo letras
+  "edad": 35,              // 0-150, coherente con fecha nacimiento
+  "fechaNacimiento": "1989-03-15"  // formato yyyy-MM-dd, fecha pasada
+}
 ```
 
-Guardar el token devuelto para usar en los siguientes requests.
-
-#### 2. **Crear un Cliente**
-```bash
-curl -X POST http://challenge-backend.us-east-1.elasticbeanstalk.com/api/creacliente \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer {TOKEN_OBTENIDO}" \
-  -d '{
-    "nombre": "Juan",
-    "apellido": "Pérez",
-    "edad": 35,
-    "fechaNacimiento": "1989-03-15"
-  }'
+**Parámetros Opcionales:**
+```
+?emailDestino=correo@ejemplo.com  // Envía notificación de creación al email
 ```
 
-#### 3. **Obtener Estadísticas (KPIs)**
-```bash
-curl -X GET http://challenge-backend.us-east-1.elasticbeanstalk.com/api/kpideclientes \
-  -H "Authorization: Bearer {TOKEN_OBTENIDO}"
+**Validaciones:**
+- Edad coherente con fecha nacimiento (±1 año tolerancia)
+- No permite duplicados (nombre + apellido + fecha)
+
+---
+
+### 2️⃣ Obtener Estadísticas (KPIs)
+```http
+GET /api/kpideclientes
+Headers: Authorization: Bearer {token}
 ```
 
-#### 4. **Listar Todos los Clientes**
-```bash
-curl -X GET http://challenge-backend.us-east-1.elasticbeanstalk.com/api/listclientes \
-  -H "Authorization: Bearer {TOKEN_OBTENIDO}"
+**Parámetros Opcionales:**
 ```
+?emailDestino=correo@ejemplo.com  // Envía las estadísticas al email
+```
+
+**Respuesta:**
+- Total clientes
+- Promedio edad
+- Desviación estándar
+- Edad mínima/máxima
+- Distribución por rangos
+
+---
+
+### 3️⃣ Listar Clientes
+```http
+GET /api/listclientes
+Headers: Authorization: Bearer {token}
+```
+
+**Parámetros Opcionales:**
+```
+?emailDestino=correo@ejemplo.com  // Envía el listado completo al email
+```
+
+**Respuesta:** Lista con fecha probable de fallecimiento (esperanza vida: 75 años)
+
+---
+
+## ➕ Endpoints Adicionales
+
+### Obtener Cliente por ID
+```http
+GET /api/clientes/{id}
+Headers: Authorization: Bearer {token}
+```
+
+### Actualizar Cliente
+```http
+PUT /api/clientes/{id}
+Headers: Authorization: Bearer {token}
+```
+```json
+{
+  "nombre": "Juan Carlos",
+  "apellido": "Pérez",
+  "edad": 36,
+  "fechaNacimiento": "1989-03-15"
+}
+```
+
+**Parámetros Opcionales:**
+```
+?emailDestino=correo@ejemplo.com  // Envía notificación de actualización
+```
+
+### Eliminar Cliente (Solo ADMIN)
+```http
+DELETE /api/clientes/{id}
+Headers: Authorization: Bearer {token}
+```
+
+**Parámetros Opcionales:**
+```
+?emailDestino=correo@ejemplo.com  // Envía confirmación de eliminación
+```
+
+### Crear Múltiples Clientes (Solo ADMIN)
+```http
+POST /api/creaclientes/batch
+Headers: Authorization: Bearer {token}
+```
+```json
+{
+  "clientes": [
+    {"nombre": "Ana", "apellido": "López", "edad": 28, "fechaNacimiento": "1996-01-15"},
+    {"nombre": "Luis", "apellido": "García", "edad": 45, "fechaNacimiento": "1979-06-20"}
+  ]
+}
+```
+
+**Parámetros Opcionales:**
+```
+?emailDestino=correo@ejemplo.com  // Envía resumen del batch (exitosos/fallidos)
+```
+
+**Límite:** Máximo 100 clientes por batch
+
+### Listar con Paginación
+```http
+GET /api/clientes?page=0&size=10&sortBy=edad&sortDirection=ASC
+Headers: Authorization: Bearer {token}
+```
+
+### Health Check (Sin autenticación)
+```http
+GET /api/health
+```
+
+---
+
+## 🔑 Información Rápida
 
 ### Credenciales de Prueba
+```
+Email: admin@challenge.com
+Password: Admin123!
+```
 
-| Rol | Email | Password |
-|-----|-------|----------|
-| ADMIN | admin@challenge.com | Admin123! |
+### Roles
+- **USER**: Crear y consultar clientes
+- **ADMIN**: Todo + eliminar + crear usuarios + batch
 
-⚠️ **Nota:** El token JWT tiene una duración de 24 horas.
+### Formato del Token
+```
+Headers: Authorization: Bearer {token}
+```
+
+### Validaciones Principales
+| Campo | Reglas |
+|-------|--------|
+| `nombre/apellido` | 2-100 caracteres, solo letras y espacios |
+| `edad` | 0-150 años, coherente con fecha nacimiento |
+| `fechaNacimiento` | Formato yyyy-MM-dd, fecha pasada |
+| `email` | Formato válido, único en sistema |
+| `password` | 6-100 caracteres, 1 mayúscula, 1 minúscula, 1 número |
+
+### Códigos de Error
+- `200` OK
+- `201` Creado
+- `400` Datos inválidos
+- `401` No autenticado
+- `403` Sin permisos
+- `404` No encontrado
+- `409` Duplicado
+
+### Parámetro Email (Opcional en todos los endpoints de clientes)
+Agrega `?emailDestino=tu-correo@gmail.com` para recibir:
+- Confirmación de cliente creado/actualizado/eliminado
+- Estadísticas calculadas en formato HTML
+- Listado de clientes en tabla
+- Resumen de operaciones batch
+
+---
+
+## 🧪 Prueba Rápida
+
+1. **Login** → Obtener token
+2. **Crear 2-3 clientes** con el token
+3. **Consultar estadísticas** → Verificar promedio y desviación
+4. **Listar clientes** → Ver fechas probables de fallecimiento
+5. **Opcional:** Probar envío de emails agregando `?emailDestino=tu-email@gmail.com`
 
 ## 📊 Patrones de Diseño Implementados
 
