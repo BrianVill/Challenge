@@ -564,7 +564,3 @@ Cliente cliente = Cliente.builder()
 - LinkedIn: [Brian Villalva](https://www.linkedin.com/in/brian-villalva-76b822238/)
 
 ---
-
-**Estado del Servicio:** 🟢 ONLINE
-
-**URL de Producción:** http://challenge-backend.us-east-1.elasticbeanstalk.com
